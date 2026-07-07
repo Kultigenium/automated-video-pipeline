@@ -1,0 +1,28 @@
+services:
+  tts:
+    build:
+      context: ./services/tts
+    container_name: tts
+    restart: unless-stopped
+    env_file:
+      - ./services/tts/.env
+    expose:
+      - "8787"
+
+  tts-fallback:
+    build:
+      context: ./services/tts-fallback
+    container_name: tts-fallback
+    restart: unless-stopped
+    expose:
+      - "5500"
+
+  video-renderer:
+    build:
+      context: ./services/video-renderer
+    container_name: video-renderer
+    restart: unless-stopped
+    env_file:
+      - ./services/video-renderer/.env
+    expose:
+      - "8788"

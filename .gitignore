@@ -1,0 +1,17 @@
+# Secrets — env files never enter the repo
+.env
+**/.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Media artifacts
+*.mp3
+*.mp4
+*.wav
+
+# OS / editor
+.DS_Store
+*.swp
+tmp/

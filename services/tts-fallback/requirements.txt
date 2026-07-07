@@ -1,0 +1,4 @@
+piper-tts
+fastapi
+uvicorn[standard]
+pydantic
