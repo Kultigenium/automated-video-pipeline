@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1056" height="340" viewBox="0 0 1056 340" font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif">
+<defs><pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.2" fill="#2d333b"/></pattern><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#768390"/></marker><filter id="sh" x="-10%" y="-10%" width="120%" height="140%"><feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#000" flood-opacity="0.45"/></filter></defs>
+<rect width="1056" height="340" rx="12" fill="#161b22"/>
+<rect width="1056" height="340" rx="12" fill="url(#dots)"/>
+<path d="M312,90 C362,90 342,90 392,90" fill="none" stroke="#768390" stroke-width="2.4" marker-end="url(#arr)"/>
+<path d="M664,90 C714,90 694,90 744,90" fill="none" stroke="#768390" stroke-width="2.4" marker-end="url(#arr)"/>
+<rect x="686" y="77" width="35" height="26" rx="13" fill="#22272e" stroke="#444c56"/>
+<text x="704" y="95" fill="#cdd9e5" font-size="15" text-anchor="middle">ok</text>
+<path d="M528,140 C528,190 528,150 528,200" fill="none" stroke="#768390" stroke-width="2.4" marker-end="url(#arr)"/>
+<rect x="430" y="157" width="96" height="26" rx="13" fill="#22272e" stroke="#444c56"/>
+<text x="478" y="175" fill="#cdd9e5" font-size="15" text-anchor="middle">violation</text>
+<path d="M880,140 C880,280 528,60 528,200" fill="none" stroke="#768390" stroke-width="2.4" marker-end="url(#arr)"/>
+<rect x="682" y="157" width="44" height="26" rx="13" fill="#22272e" stroke="#444c56"/>
+<text x="704" y="175" fill="#cdd9e5" font-size="15" text-anchor="middle">FIX</text>
+<path d="M392,250 C339,250 339,90 392,90" fill="none" stroke="#768390" stroke-width="2.4" stroke-dasharray="8 6" marker-end="url(#arr)"/>
+<path d="M880,140 C880,190 880,150 880,200" fill="none" stroke="#768390" stroke-width="2.4" marker-end="url(#arr)"/>
+<rect x="893" y="157" width="70" height="26" rx="13" fill="#22272e" stroke="#444c56"/>
+<text x="928" y="175" fill="#cdd9e5" font-size="15" text-anchor="middle">REJECT</text>
+<g filter="url(#sh)"><rect x="40" y="40" width="272" height="100" rx="14" fill="#2d333b" stroke="#a371f7" stroke-width="2.4"/></g>
+<rect x="41" y="54" width="6" height="72" rx="3" fill="#a371f7"/>
+<text x="62" y="74" fill="#e6edf3" font-size="22" font-weight="600">Groq writes</text>
+<text x="62" y="100" fill="#a2afbd" font-size="16">story via webhook from ①</text>
+<text x="62" y="121" fill="#a2afbd" font-size="16">~90 words, 4 beats</text>
+<circle cx="40" cy="90.0" r="5" fill="#444c56"/>
+<circle cx="312" cy="90.0" r="5" fill="#444c56"/>
+<g filter="url(#sh)"><rect x="392" y="40" width="272" height="100" rx="14" fill="#2d333b" stroke="#58a6ff" stroke-width="2.4"/></g>
+<rect x="393" y="54" width="6" height="72" rx="3" fill="#58a6ff"/>
+<text x="414" y="74" fill="#e6edf3" font-size="22" font-weight="600">Gate 1: rules</text>
+<text x="414" y="100" fill="#a2afbd" font-size="16">deterministic code</text>
+<text x="414" y="121" fill="#a2afbd" font-size="16">length, hook, take, digits</text>
+<circle cx="392" cy="90.0" r="5" fill="#444c56"/>
+<circle cx="664" cy="90.0" r="5" fill="#444c56"/>
+<g filter="url(#sh)"><rect x="744" y="40" width="272" height="100" rx="14" fill="#2d333b" stroke="#a371f7" stroke-width="2.4"/></g>
+<rect x="745" y="54" width="6" height="72" rx="3" fill="#a371f7"/>
+<text x="766" y="74" fill="#e6edf3" font-size="22" font-weight="600">Gate 2: Gemini</text>
+<text x="766" y="100" fill="#a2afbd" font-size="16">+ Google Search: facts,</text>
+<text x="766" y="121" fill="#a2afbd" font-size="16">recency · PASS → ③</text>
+<circle cx="744" cy="90.0" r="5" fill="#444c56"/>
+<circle cx="1016" cy="90.0" r="5" fill="#444c56"/>
+<g filter="url(#sh)"><rect x="392" y="200" width="272" height="100" rx="14" fill="#2d333b" stroke="#a371f7" stroke-width="2.4"/></g>
+<rect x="393" y="214" width="6" height="72" rx="3" fill="#a371f7"/>
+<text x="414" y="234" fill="#e6edf3" font-size="22" font-weight="600">Groq revises</text>
+<text x="414" y="260" fill="#a2afbd" font-size="16">with the findings</text>
+<text x="414" y="281" fill="#a2afbd" font-size="16">at most 2×</text>
+<circle cx="392" cy="250.0" r="5" fill="#444c56"/>
+<circle cx="664" cy="250.0" r="5" fill="#444c56"/>
+<g filter="url(#sh)"><rect x="744" y="200" width="272" height="100" rx="14" fill="#2d333b" stroke="#e3b341" stroke-width="2.4"/></g>
+<rect x="745" y="214" width="6" height="72" rx="3" fill="#e3b341"/>
+<text x="766" y="234" fill="#e6edf3" font-size="22" font-weight="600">Rejected</text>
+<text x="766" y="260" fill="#a2afbd" font-size="16">topic not worth a video</text>
+<text x="766" y="281" fill="#a2afbd" font-size="16">reason to the operator</text>
+<circle cx="744" cy="250.0" r="5" fill="#444c56"/>
+<circle cx="1016" cy="250.0" r="5" fill="#444c56"/>
+</svg>

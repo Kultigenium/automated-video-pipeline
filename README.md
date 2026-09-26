@@ -4,14 +4,23 @@ A self-hosted, event-driven pipeline that turns the day's most relevant tech sto
 
 > This is a **sanitized showcase** of a private production system. Service code is real and runnable; orchestration workflows, credentials and channel configuration stay private. All secrets are injected via environment files that never touch the image or the repo.
 
-![Architecture](docs/architecture.svg)
+### ① Scout — finds the story of the day
 
-**How to read it:** ① runs once a day and picks one story; ② runs once per story.
+![Scout](docs/architecture_1_scout.svg)
 
-1. **Scout** pulls ~20 sources (Hacker News, RSS, GitHub search, vendor blogs), drops duplicates and off-topic items with a cheap keyword score, lets Gemini rate the top 10 and forwards the best one — with its article body — if it scores ≥ 7.
-2. **Script + gates:** Groq writes a ~90-word script. **Gate 1** is deterministic code (length, hook, a concrete "my take", no digits/hype/CTAs). **Gate 2** is a *different* model with live Google Search that checks recency, facts, niche fit and advertiser safety. `FIX` sends precise findings back to the writer (max. 2 rounds), `REJECT` drops the topic.
-3. **Voice & video:** the TTS service returns audio **and** per-word timestamps in one call. The renderer uses them to scroll a phone-width capture of the source page and highlight the exact figure at the moment it is spoken; commentary beats run on stock B-roll.
-4. **Delivery:** script, audio, video and upload metadata land in a messenger. A human reviews and publishes.
+Pulls ~20 sources (Hacker News, RSS, GitHub search, vendor blogs), drops duplicates and off-topic items with a cheap keyword score, lets Gemini rate the top 10 and forwards the best one — with its article body — if it scores ≥ 7.
+
+### ② Script & quality gates — checked before anything costs money
+
+![Script and gates](docs/architecture_2_script.svg)
+
+Groq writes a ~90-word script. **Gate 1** is deterministic code (length, hook, a concrete "my take", no digits/hype/CTAs). **Gate 2** is a *different* model with live Google Search that checks recency, facts, niche fit and advertiser safety. `FIX` sends precise findings back to the writer (max. 2 rounds), `REJECT` drops the topic.
+
+### ③ Voice, video, delivery
+
+![Voice, video, delivery](docs/architecture_3_video.svg)
+
+The TTS service returns audio **and** per-word timestamps in one call. The renderer uses them to scroll a phone-width capture of the source page and highlight the exact figure at the moment it is spoken; commentary beats run on stock B-roll. Script, audio, video and upload metadata land in a messenger — a human reviews and publishes.
 
 ## Components
 
