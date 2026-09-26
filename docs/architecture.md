@@ -2,7 +2,7 @@
 
 Two workflows drive the pipeline. The JSON exports stay private (they reference credentials and delivery targets); this documents their logic.
 
-![Scout](architecture_1_scout.svg)
+![Architecture](architecture.svg)
 
 ## Workflow 1 — Scout (daily cron)
 
@@ -29,10 +29,6 @@ Design notes:
 - **Full text beats teasers.** RSS descriptions are too thin for a fact-dense script; the top story's body is fetched and appended (the story is kept even if the fetch fails).
 
 ## Workflow 2 — Script Generator (webhook)
-
-![Script and gates](architecture_2_script.svg)
-
-![Voice, video, delivery](architecture_3_video.svg)
 
 ```
 Webhook → normalize + duplicate check
