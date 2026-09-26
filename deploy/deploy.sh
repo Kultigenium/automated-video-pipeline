@@ -8,10 +8,12 @@
 #
 # Usage:
 #   bash deploy.sh              # default: video-renderer
-#   bash deploy.sh tts | piper | video | all
+#   bash deploy.sh tts | fallback | video | all
 #
-# Security: copies ONLY build-relevant files (server code, Dockerfile,
+# Security: copies ONLY build-relevant files (code, Dockerfile,
 # requirements.txt) into the build contexts. .env files are never touched.
+# Rebuilds exactly one service (--no-deps): a blanket `compose up -d` could
+# recreate unrelated containers with a different environment.
 set -euo pipefail
 
 REPO="${REPO_DIR:-$HOME/pipeline-repo}"
@@ -24,22 +26,23 @@ pull() {
 }
 
 deploy_service() {
-  local src="$1" dst="$2" svc="$3" main="$4"
+  local src="$1" dst="$2" svc="$3"; shift 3
   echo "==> $svc: copy build context"
-  cp "$REPO/$src/$main"            "$dst/$main"
-  cp "$REPO/$src/Dockerfile"       "$dst/Dockerfile"
-  cp "$REPO/$src/requirements.txt" "$dst/requirements.txt"
+  for f in "$@" Dockerfile requirements.txt; do
+    cp "$REPO/$src/$f" "$dst/$f"
+  done
   echo "==> $svc: rebuild"
-  docker compose -f "$COMPOSE" up -d --build "$svc"
+  docker compose -f "$COMPOSE" up -d --build --no-deps "$svc"
 }
 
 pull
 case "$TARGET" in
-  video) deploy_service services/video-renderer "$HOME/video-renderer" video-renderer server.py ;;
-  tts)   deploy_service services/tts            "$HOME/tts"            tts            edge_tts_server.py ;;
-  piper) deploy_service services/tts-fallback   "$HOME/piper"          tts-fallback   piper_server.py ;;
-  all)   "$0" video; "$0" tts; "$0" piper ;;
-  *) echo "unknown target: '$TARGET' (allowed: video|tts|piper|all)" >&2; exit 1 ;;
+  video)    deploy_service services/video-renderer "$HOME/video-renderer" video-renderer \
+              server.py beweis.py broll.py motion.py motion3.py ;;
+  tts)      deploy_service services/tts          "$HOME/tts"          tts          elevenlabs_server.py ;;
+  fallback) deploy_service services/tts-fallback "$HOME/tts-fallback" tts-fallback kokoro_server.py ;;
+  all)      "$0" video; "$0" tts; "$0" fallback ;;
+  *) echo "unknown target: '$TARGET' (allowed: video|tts|fallback|all)" >&2; exit 1 ;;
 esac
 
 echo "==> done: $TARGET"

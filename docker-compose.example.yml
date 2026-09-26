@@ -1,3 +1,5 @@
+# All services join one internal network. Nothing is published to the host:
+# the orchestrator (n8n) reaches them by service name, e.g. http://tts:5502/tts
 services:
   tts:
     build:
@@ -7,7 +9,7 @@ services:
     env_file:
       - ./services/tts/.env
     expose:
-      - "8787"
+      - "5502"
 
   tts-fallback:
     build:
@@ -15,7 +17,7 @@ services:
     container_name: tts-fallback
     restart: unless-stopped
     expose:
-      - "5500"
+      - "5501"
 
   video-renderer:
     build:

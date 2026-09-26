@@ -1,4 +1,6 @@
-piper-tts
-fastapi
-uvicorn[standard]
-pydantic
+kokoro-onnx==0.5.0
+onnxruntime==1.23.2
+numpy==2.3.5
+fastapi==0.121.3
+uvicorn[standard]==0.38.0
+pydantic==2.12.4

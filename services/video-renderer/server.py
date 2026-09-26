@@ -1,4 +1,7 @@
 import base64
+
+import beweis
+import motion
 import logging
 import math
 import subprocess
@@ -6,6 +9,7 @@ import tempfile
 import os
 import random
 import re
+import shutil
 import traceback
 from urllib.parse import urljoin
 
@@ -14,11 +18,12 @@ from bs4 import BeautifulSoup
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("video-renderer")
 
-app = FastAPI(title="ShortFormPipeline Video Renderer", version="0.6.0")
+app = FastAPI(title="ShortFormPipeline Video Renderer", version="0.8.0")
 
 
 @app.exception_handler(Exception)
@@ -52,17 +57,49 @@ USER_AGENT = (
 )
 HTTP_TIMEOUT = 8.0
 MAX_IMAGE_BYTES = 8 * 1024 * 1024  # 8 MB Hard-Limit
+# Obergrenzen fuer Anfragen: Shorts sind unter einer Minute. Ohne Deckel liesse
+# sich der Renderer mit einem riesigen Audio oder erfundenen Wort-Timings
+# ("end": 999999) minutenlang beschaeftigen und die Platte vollschreiben.
+MAX_VIDEO_SEKUNDEN = 180
+MAX_AUDIO_B64 = 12_000_000     # ~9 MB MP3, gut 9 Minuten bei 128 kbit/s
+MAX_WOERTER = 2000
 
 
 class RenderRequest(BaseModel):
-    audio_base64: str = Field(..., description="MP3 audio as base64 string")
-    title: str = Field(..., description="Title shown at top of video")
-    link: str = Field("", description="Article URL — for OG-Image fetch")
-    background_color: str = Field("0x0E1116", description="Solid background color (hex with 0x prefix) — Fallback if no image")
-    text_color: str = Field("white")
-    watermark: str = Field("DEMO")
+    audio_base64: str = Field(..., max_length=MAX_AUDIO_B64, description="MP3 audio as base64 string")
+    title: str = Field(..., max_length=500, description="Title shown at top of video")
+    link: str = Field("", max_length=2048, description="Article URL — for OG-Image fetch")
+    background_color: str = Field("0x0E1116", pattern=r"^0x[0-9A-Fa-f]{6}$", description="Solid background color (hex with 0x prefix) — Fallback if no image")
+    text_color: str = Field("white", pattern=r"^[A-Za-z]{1,20}$|^0x[0-9A-Fa-f]{6}$")
+    watermark: str = Field(
+        "DEMO",
+        max_length=60,
+        description="Kanalname im Bild. Die Workflows schicken das Feld nicht, also greift dieser Default.",
+    )
     captions: bool = Field(True, description="Kinetic Word-Captions einbrennen")
-    script: str = Field("", description="Exakter gesprochener Text (Groq) — als Whisper-Vorlage gegen Falsch-Transkription (z.B. Code->Kot)")
+    script: str = Field("", max_length=5000, description="Exakter gesprochener Text (Groq) — als Whisper-Vorlage gegen Falsch-Transkription (z.B. Code->Kot)")
+    style: str = Field(
+        "motion",
+        pattern=r"^(beweis|motion|slideshow)$",
+        description=(
+            "motion = Typografie traegt das Bild (Standard, nutzt die Wort-Timings). "
+            "beweis = echte Quelle (Seiten-Capture, die Kamera liest mit) im Schnitt "
+            "mit Stock-Clips; ohne Quelle und Clips uebernimmt motion. "
+            "slideshow = alter Weg mit Pexels-Fotos und Ken-Burns. Stock-Foto-"
+            "Slideshows gelten bei YouTube als Spam-Signal, darum ist motion der "
+            "Standard - slideshow bleibt als Rueckfallebene."
+        ),
+    )
+    words: list[dict] = Field(
+        default_factory=list,
+        max_length=MAX_WOERTER,
+        description=(
+            "Exakte Wort-Timings vom TTS-Service (ElevenLabs with-timestamps): "
+            "[{word,start,end}]. Wenn gesetzt, entfaellt die Whisper-Transkription "
+            "(loest Video-Problem #10: erste Caption zu frueh). Leer = Whisper-Fallback, "
+            "z.B. wenn Kokoro als 429-Fallback gesprochen hat (liefert keine Timings)."
+        ),
+    )
 
 
 def escape_for_ffmpeg_text(text: str) -> str:
@@ -95,11 +132,18 @@ def wrap_title(title: str, width_chars: int = 28) -> str:
 
 def fetch_og_image(article_url: str) -> bytes | None:
     """Versucht og:image / twitter:image vom Artikel zu ziehen."""
-    if not article_url:
+    if not article_url or not beweis.ist_oeffentliche_url(article_url):
         return None
+
+    def nur_oeffentlich(request: httpx.Request) -> None:
+        # greift auch fuer jede Weiterleitung und fuer die Bild-URL (SSRF-Schutz)
+        if not beweis.ist_oeffentliche_url(str(request.url)):
+            raise httpx.RequestError("nicht-oeffentliche Adresse geblockt", request=request)
+
     try:
         headers = {"User-Agent": USER_AGENT}
-        with httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=True, headers=headers) as client:
+        with httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=True, headers=headers,
+                          event_hooks={"request": [nur_oeffentlich]}) as client:
             r = client.get(article_url)
             if r.status_code != 200 or not r.text:
                 log.info("OG-fetch: HTTP %s for %s", r.status_code, article_url)
@@ -284,6 +328,28 @@ def get_whisper():
     return _WHISPER
 
 
+def words_from_payload(raw) -> list:
+    """Wandelt die Wort-Timings des TTS-Service ([{word,start,end}]) in das interne
+    Format [(start, end, wort)]. Exakte Zeiten statt Whisper-Schaetzung.
+    Defensiv: unbrauchbare Eintraege werden uebersprungen, nicht geworfen."""
+    out = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("word", "")).strip()
+        if not text:
+            continue
+        try:
+            start = float(item.get("start"))
+            end = float(item.get("end"))
+        except (TypeError, ValueError):
+            continue
+        if end < start:
+            continue
+        out.append((max(0.0, start), max(0.0, end), text))
+    return out
+
+
 def transcribe_words(audio_path: str, script: str = ""):
     """Liefert Liste (start, end, wort) mit Millisekunden-Timing via faster-whisper.
     script: exakter gesprochener Text (Groq) als initial_prompt -> biast Whisper auf die
@@ -291,7 +357,7 @@ def transcribe_words(audio_path: str, script: str = ""):
     try:
         model = get_whisper()
         segments, _info = model.transcribe(
-            audio_path, language="de", word_timestamps=True, beam_size=1,
+            audio_path, language="en", word_timestamps=True, beam_size=1,
             initial_prompt=(script.strip() or None),
         )
         words = []
@@ -418,7 +484,7 @@ def probe_audio_duration(audio_path: str) -> float:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "video-renderer", "version": "0.6.0", "ffmpeg": _ffmpeg_version()}
+    return {"status": "ok", "service": "video-renderer", "version": "0.8.0", "ffmpeg": _ffmpeg_version(), "styles": ["beweis", "motion", "slideshow"], "default_style": "motion"}
 
 
 def _ffmpeg_version() -> str:
@@ -463,6 +529,18 @@ ENCODE_ARGS = [
 
 @app.post("/render")
 def render(req: RenderRequest):
+    """Rendert und raeumt den Arbeitsordner immer auf - nach dem Senden oder beim Fehler."""
+    tmpdir = tempfile.mkdtemp(prefix="video_render_")
+    try:
+        antwort = _render(req, tmpdir)
+    except BaseException:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+    antwort.background = BackgroundTask(shutil.rmtree, tmpdir, ignore_errors=True)
+    return antwort
+
+
+def _render(req: RenderRequest, tmpdir: str):
     log.info(
         "Render request: title_len=%d, audio_b64_len=%d, link=%s, captions=%s",
         len(req.title or ""), len(req.audio_base64 or ""), req.link or "(none)", req.captions,
@@ -480,7 +558,6 @@ def render(req: RenderRequest):
     title_escaped = escape_for_ffmpeg_text(title_wrapped)
     watermark_escaped = escape_for_ffmpeg_text(req.watermark)
 
-    tmpdir = tempfile.mkdtemp(prefix="video_render_")
     audio_path = os.path.join(tmpdir, "input.mp3")
     video_path = os.path.join(tmpdir, "out.mp4")
 
@@ -489,11 +566,68 @@ def render(req: RenderRequest):
 
     duration = probe_audio_duration(audio_path)
     log.info("Audio duration ~%.2fs", duration)
+    if duration > MAX_VIDEO_SEKUNDEN:
+        raise HTTPException(status_code=400, detail=f"audio longer than {MAX_VIDEO_SEKUNDEN}s")
 
-    # Captions: Stimme transkribieren -> ASS
+    # Wort-Timings ermitteln - Grundlage fuer Captions UND fuer den Motion-Stil.
+    # Darum vor der Stil-Verzweigung, nicht mehr nur im Captions-Zweig.
+    words = words_from_payload(req.words)
+    # Die Timings bestimmen die Videolaenge - nie laenger als das Audio selbst
+    grenze = min(MAX_VIDEO_SEKUNDEN, max(duration + 2.0, 60.0))
+    if words and words[-1][1] > grenze:
+        raise HTTPException(status_code=400, detail="word timings exceed audio duration")
+    if words:
+        log.info("%d exakte Wort-Timings vom TTS uebernommen (kein Whisper)", len(words))
+    elif req.captions or req.style in ("motion", "beweis"):
+        if req.words:
+            log.warning("words-Feld gesetzt, aber unbrauchbar -> Whisper-Fallback")
+        # Greift z.B. wenn Kokoro als 429-Fallback gesprochen hat: Kokoro
+        # liefert nur MP3 ohne Timings, Whisper schaetzt sie dann.
+        words = transcribe_words(audio_path, req.script)
+
+    # ---------------------------------------------------------------- Beweis
+    # Echte Quelle (Seiten-Capture, die Kamera liest mit) im Schnitt mit
+    # Stock-Clips. Ist weder Quelle noch B-Roll zu haben, uebernimmt Motion.
+    if req.style == "beweis" and words:
+        info = beweis.render_video(
+            words, audio_path, req.link, req.title, video_path, tmpdir,
+            marke=req.watermark or "DEMO", skript=req.script,
+        )
+        if info:
+            log.info("Beweis-Video fertig: %s", info)
+            return FileResponse(video_path, media_type="video/mp4", filename="reel.mp4")
+        log.warning("Beweis-Stil nicht moeglich -> Motion-Fallback")
+
+    # ---------------------------------------------------------------- Motion
+    if req.style in ("motion", "beweis") and words:
+        frames_dir = os.path.join(tmpdir, "frames")
+        anzahl, m_dauer, szenen = motion.render_frames(
+            words, frames_dir, marke=req.watermark or "DEMO"
+        )
+        log.info("Motion: %d Frames, %.2fs, Szenen: %s",
+                 anzahl, m_dauer, motion.szenen_uebersicht(szenen))
+        if anzahl:
+            cmd = [
+                "ffmpeg", "-y",
+                "-framerate", "30",
+                "-i", os.path.join(frames_dir, "f_%05d.png"),
+                "-i", audio_path,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart", "-shortest", video_path,
+            ]
+            log.info("Running ffmpeg (motion)...")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+            if result.returncode != 0:
+                log.error("ffmpeg (motion) failed: %s", result.stderr[-800:])
+                raise HTTPException(status_code=500, detail="ffmpeg failed (motion)")
+            log.info("Motion-Video fertig: %d Bytes", os.path.getsize(video_path))
+            return FileResponse(video_path, media_type="video/mp4", filename="reel.mp4")
+        log.warning("Motion lieferte keine Frames -> Slideshow-Fallback")
+
+    # ------------------------------------------------------------- Slideshow
     ass_path = None
     if req.captions:
-        words = transcribe_words(audio_path, req.script)
         ass_content = generate_ass(words, duration)
         if ass_content:
             ass_path = os.path.join(tmpdir, "subs.ass")

@@ -1,51 +1,60 @@
 # Orchestration layer (n8n)
 
-Two workflows drive the pipeline. The JSON exports stay private (they contain credentials references and delivery targets); this documents their logic.
+Two workflows drive the pipeline. The JSON exports stay private (they reference credentials and delivery targets); this documents their logic.
+
+![Architecture](architecture.svg)
 
 ## Workflow 1 — Scout (daily cron)
 
 ```
-Cron (daily) → 10× RSS Read → Merge → Normalize (title/link/description)
-→ Dedupe (7-day keyword history via getWorkflowStaticData)
-→ Keyword pre-score → cap to top 10 articles
-→ Gemini 2.5 relevance scoring (retry 3×, batched, 1 article per call — free-tier rate limits)
-→ IF score ≥ 7 → mark highest as top story
-→ Messenger notification + hand-off to Workflow 2 (webhook)
+Cron (daily, early morning)
+→ Source registry (one Code node, one line per source: type rss|json, weight, max age)
+→ Fetch all sources (HTTP, continue on error)
+→ Parse RSS/Atom + HN Algolia JSON + GitHub Search JSON into one article list
+   · prompt-injection sanitizer on titles/descriptions
+   · per-source age window (news 24 h, vendor blogs up to 7 days)
+   · GitHub: non-Latin descriptions dropped, bought-star pattern (>1,000 stars, <1 % forks) gets no bonus
+→ Dedupe (in-run + across runs, 500-link memory in workflow static data, tracking params stripped)
+→ Keyword scoring (niche terms +, funding/enterprise/policy terms −, source weight, max 4 per source)
+→ Top 10 → Gemini relevance score 1–10 (structured JSON, retry 3×)
+→ IF score ≥ 7 → fetch full article text of the top story (HTML → text, capped, sanitized)
+                → notify + POST to Workflow 2 (webhook)
+   ELSE        → "no story today" alert
 ```
 
 Design notes:
-- **Batching with delays** is mandatory on free-tier LLM APIs (requests/day caps).
-- LLM chain nodes only return the completion — original fields (title, link) must be explicitly re-joined from earlier nodes (`$('NodeName').all()`).
-- Structured JSON output from the scoring prompt is required for reliable IF conditions.
+- **Adding a source is one line**, not a new node — the parser knows every format.
+- **One dead feed never stops the run.** Failures are counted in a per-run source report.
+- **Cheap filter before the paid one.** The keyword score removes clearly off-topic items before any LLM quota is spent.
+- **Full text beats teasers.** RSS descriptions are too thin for a fact-dense script; the top story's body is fetched and appended (the story is kept even if the fetch fails).
 
-## Workflow 2 — Script Generator (webhook-triggered)
+## Workflow 2 — Script Generator (webhook)
 
 ```
-Webhook → Normalize + keyword extraction
-→ Groq Llama 3.3 70B: script generation
-   (system prompt enforces: negative-statement hook, 3-beat body,
-    loop ending that reprises the hook, hard word-count floor,
-    spoken-style commas for TTS pacing, few-shot examples)
-→ Parse + validate (non-empty guard)
-→ parallel:
-   ├─ Messenger: script for human review
-   └─ TTS service (POST /tts)
-        → IF audio ok → Messenger audio + IF top story:
-        │     → base64 encode (getBinaryDataBuffer)
-        │     → video renderer (POST /render)
-        │     → IF video ok → Messenger video  ELSE → alert
-        └─ ELSE → Piper fallback (POST /tts) → same continuation / alert
-→ Groq: upload metadata (title ≤60 chars with product name first, description, hashtags)
+Webhook → normalize + duplicate check
+→ Groq: script (four spoken beats: problem hook · news facts · use case · "my take"; loop ending)
+→ Gate 1: rule check (deterministic)      ── violation ──┐
+→ Gate 2: Gemini + Google Search          ── FIX ────────┤→ Groq revises with findings → Gate 1 (max 2 rounds)
+                                          ── REJECT ─────→ notify with reason, stop
+→ PASS
+→ TTS service (audio + word timings)  ── error → Kokoro fallback (audio only; renderer estimates timings)
+→ Top story? → Video renderer (style "beweis") → MP4
+→ Groq: upload metadata (title, description, hashtags)
+→ Messenger: script, audio, video, upload template → human publishes
 ```
 
 Design notes:
-- Every external call has an explicit error branch that ends in a messenger alert — the operator always learns *why* a video is missing.
-- The word-count floor lives in the prompt because "aim for ~30 seconds" is not something an LLM can hit reliably; word counts are.
-- Deploys go through the n8n REST API surgically: fetch live workflow, replace only the prompt nodes by name, `PUT` back, then a deactivate/activate cycle (n8n caches the active version otherwise).
+- **Two gates with different failure modes.** Gate 1 is free and deterministic (word count, hook length, verdict beat present, no digits/hype/CTAs/labels). Gate 2 is a different model than the writer, with live search — it catches what changes over time: superseded versions, wrong prices, off-niche topics, advertiser risk. See [`quality-gates/`](../quality-gates).
+- **FIX vs. REJECT.** FIX = the topic is good, the script is not → revise. REJECT = the topic itself is not worth a video → revising won't help.
+- **Every external call has an explicit error branch** that ends in a notification — the operator always learns *why* a video is missing.
+- **Word counts, not durations.** "Aim for 30 seconds" is not something an LLM can hit; 85–100 words is.
 
-## Rendering pipeline (inside video-renderer)
+## Rendering pipeline (video-renderer, style `beweis`)
 
-1. Fetch article OG-image; top up with stock photos (keyword search) to ~6 images.
-2. Transcribe the TTS MP3 with faster-whisper (word timestamps).
-3. Generate ASS subtitles: 2-word cues, pop-in animation, screen-center alignment, font auto-shrink so the longest word never overflows.
-4. FFmpeg single pass: photo slideshow (hard cuts + Ken-Burns zoom), color grade + vignette + film grain, burned-in captions, top-center watermark, AAC audio mux → MP4 1080×1920.
+1. **Capture:** headless Chromium opens the source at phone width (360 CSS px × device scale 3 = exactly 1080 px), dismisses cookie banners, takes one full-page capture and records the positions of evidence: figures with units and phrases the script quotes verbatim.
+2. **Match:** spoken words are mapped to evidence (`twenty dollars` → `$20`, `five-hour` → `5-hour`). Negations get a strike-through instead of a highlight.
+3. **Camera:** a virtual camera scrolls the capture in sync with the word timings, highlights the evidence as it is spoken. No horizontal pan, max. 16 % zoom.
+4. **Cut:** facts play on the source; commentary and evidence-free stretches play on stock clips (switch every 2–3 s on beat boundaries, per-story ledger against repetition).
+5. **Encode:** raw frames are piped straight into FFmpeg with the audio → MP4 1080×1920.
+
+If there is neither a usable source nor B-roll, the renderer falls back to `motion` (kinetic typography driven by the same word timings), then to `slideshow`.
